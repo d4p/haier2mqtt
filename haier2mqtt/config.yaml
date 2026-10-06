@@ -1,0 +1,69 @@
+name: haier2mqtt
+version: "0.1.0"
+slug: haier2mqtt
+description: Sterowanie pompą ciepła Haier (Modbus TCP) z lokalną logiką i MQTT
+url: https://github.com/d4p/haier2mqtt
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: services
+boot: auto
+services:
+  - mqtt:need
+options:
+  gateway_host: 192.168.8.209
+  gateway_port: 8899
+  slave_id: 17
+  poll_interval_s: 10
+  modbus_timeout_s: 5
+  writes_enabled: false
+  cmd_power: 1
+  cmd_mode: 134
+  cmd_pump: 32
+  cmd_ch_temp: 4
+  curve_points: "-20:40, 0:32, 10:29, 20:28"
+  curve_min_water: 25
+  curve_max_water: 45
+  min_heat_on_min: 20
+  min_heat_off_min: 10
+  heartbeat_timeout_min: 10
+  forecast_stale_min: 30
+  curve_min_interval_min: 20
+  antifreeze_outdoor_start: 3
+  antifreeze_water_circulate: 5
+  antifreeze_water_heat: 3
+  antifreeze_water_exit: 10
+  antifreeze_exit_hold_min: 5
+  antifreeze_periodic_on_min: 5
+  antifreeze_periodic_every_min: 30
+  antifreeze_circulate_check_min: 10
+  log_level: info
+schema:
+  gateway_host: str
+  gateway_port: port
+  slave_id: int(1,247)
+  poll_interval_s: int(5,60)
+  modbus_timeout_s: int(1,30)
+  writes_enabled: bool
+  cmd_power: int(0,255)
+  cmd_mode: int(0,255)
+  cmd_pump: int(0,255)
+  cmd_ch_temp: int(0,255)
+  curve_points: str
+  curve_min_water: float(20,55)
+  curve_max_water: float(20,55)
+  min_heat_on_min: int(0,120)
+  min_heat_off_min: int(0,120)
+  heartbeat_timeout_min: int(2,120)
+  forecast_stale_min: int(5,240)
+  curve_min_interval_min: int(0,240)
+  antifreeze_outdoor_start: float(-10,15)
+  antifreeze_water_circulate: float(1,20)
+  antifreeze_water_heat: float(0,15)
+  antifreeze_water_exit: float(3,30)
+  antifreeze_exit_hold_min: int(1,60)
+  antifreeze_periodic_on_min: int(1,60)
+  antifreeze_periodic_every_min: int(5,240)
+  antifreeze_circulate_check_min: int(2,120)
+  log_level: list(debug|info|warning|error)

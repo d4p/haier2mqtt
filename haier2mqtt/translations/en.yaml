@@ -1,0 +1,28 @@
+configuration:
+  gateway_host: {name: Gateway host, description: IP of the USR-DR164 Modbus TCP gateway}
+  gateway_port: {name: Gateway port}
+  slave_id: {name: Modbus slave ID}
+  poll_interval_s: {name: Poll interval (s)}
+  modbus_timeout_s: {name: Modbus timeout (s)}
+  writes_enabled: {name: Writes enabled, description: "false = shadow mode: read and decide, never write"}
+  cmd_power: {name: Command byte – power, description: Register 101 high byte for on/off writes (confirmed in the supervised test)}
+  cmd_mode: {name: Command byte – mode}
+  cmd_pump: {name: Command byte – circulation pump}
+  cmd_ch_temp: {name: Command byte – CH temperature}
+  curve_points: {name: Initial heating curve, description: "outdoor:water pairs, e.g. -20:40, 0:32, 10:29, 20:28 (runtime changes come from HA)"}
+  curve_min_water: {name: Curve minimum water °C}
+  curve_max_water: {name: Curve maximum water °C}
+  min_heat_on_min: {name: Minimum heating time (min)}
+  min_heat_off_min: {name: Minimum off time (min)}
+  heartbeat_timeout_min: {name: HA heartbeat timeout (min)}
+  forecast_stale_min: {name: Forecast stale after (min)}
+  curve_min_interval_min: {name: Minimum time between curve writes (min)}
+  antifreeze_outdoor_start: {name: Antifreeze – outdoor start °C}
+  antifreeze_water_circulate: {name: Antifreeze – continuous circulation below water °C}
+  antifreeze_water_heat: {name: Antifreeze – emergency heating below water °C}
+  antifreeze_water_exit: {name: Antifreeze – exit above water °C}
+  antifreeze_exit_hold_min: {name: Antifreeze – exit hold (min)}
+  antifreeze_periodic_on_min: {name: Antifreeze – periodic circulation length (min)}
+  antifreeze_periodic_every_min: {name: Antifreeze – periodic circulation every (min)}
+  antifreeze_circulate_check_min: {name: Antifreeze – escalate if not rising after (min)}
+  log_level: {name: Log level}
