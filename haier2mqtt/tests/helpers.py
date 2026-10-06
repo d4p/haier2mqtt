@@ -8,6 +8,10 @@ def core(state_low: int = 0x04, ch: float = 29.5, high: int = 0xDD) -> tuple[int
     return (high << 8 | state_low, round(ch * 2) << 8 | 0x1E, 0x0000, 0xDD01, 0xDD5A, 0x5C1E)
 
 
+def _temp12(value: float | None) -> int:
+    return 0x7FF if value is None else round(value * 10) & 0xFFF
+
+
 def status(
     twi: float | None = 15.4,
     two: float | None = 15.9,
@@ -17,13 +21,19 @@ def status(
     defrost: bool = False,
     pump: bool = False,
     heater: bool = False,
+    twi_raw: int | None = None,
+    two_raw: int | None = None,
 ) -> tuple[int, ...]:
-    """Registers 141-156."""
+    """Registers 141-156.
+
+    Twi/Two are 12-bit two's complement tenths of °C; None encodes an out-of-range raw 0x7FF (204.7 °C).
+    twi_raw/two_raw override the encoded 12-bit raw value.
+    """
     s = [0] * 16
     s[0] = error | (0x800 if hw_antifreeze else 0) | (0x2000 if defrost else 0)
     s[3] = (0x200 if pump else 0) | (0x100 if heater else 0)
-    t1 = round((twi if twi is not None else 0) * 10)
-    t2 = round((two if two is not None else 0) * 10)
+    t1 = twi_raw if twi_raw is not None else _temp12(twi)
+    t2 = two_raw if two_raw is not None else _temp12(two)
     s[5] = ((t2 >> 8) & 0xF) << 4 | ((t1 >> 8) & 0xF)
     s[6] = (t1 & 0xFF) << 8 | (t2 & 0xFF)
     s[13] = round(tank * 10)

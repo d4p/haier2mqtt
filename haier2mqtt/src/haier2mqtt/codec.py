@@ -15,6 +15,18 @@ BIT_ON, BIT_COOL, BIT_HEAT, BIT_PUMP, BIT_TANK = 0x01, 0x02, 0x04, 0x20, 0x80
 KNOWN_BITS = BIT_ON | BIT_COOL | BIT_HEAT | BIT_PUMP | BIT_TANK
 CORE_LEN, STATUS_LEN, ADVANCED_LEN = 6, 16, 22
 PERFORMANCE = ("eco", "quiet", "turbo")
+WATER_RANGE = (-30.0, 80.0)
+
+
+def _signed12(raw: int) -> float:
+    return (raw - 0x1000 if raw >= 0x800 else raw) / 10
+
+
+def _water_temps(status: list[int]) -> tuple[int, int]:
+    """Raw 12-bit Twi/Two, laid out as PyHaier.GetTwiTwo reads them (signed decoding is ours)."""
+    twi = (status[5] & 0x0F) << 8 | (status[6] >> 8)
+    two = ((status[5] >> 4) & 0x0F) << 8 | (status[6] & 0xFF)
+    return twi, two
 
 
 def decode(raw: Raw) -> Reading:
@@ -25,7 +37,10 @@ def decode(raw: Raw) -> Reading:
 
     low = core[0] & 0xFF
     ch_target = (core[1] >> 8) / 2
-    twi, two = PyHaier.GetTwiTwo(status)
+    twi_raw, two_raw = _water_temps(status)
+    water_bad: list[str] = []
+    twi = _water_value("Twi", twi_raw, water_bad)
+    two = _water_value("Two", two_raw, water_bad)
     tao = PyHaier.GetTao(adv) if adv else None
     comp = PyHaier.GetCompInfo(adv) if adv else None
     perf_val = (raw.mode[0] & 0xFF) if raw.mode else None
@@ -50,11 +65,19 @@ def decode(raw: Raw) -> Reading:
         comp_temp=comp[4] if comp else None,
         fan_rpm=PyHaier.GetFanRpm(adv)[0] if adv else None,
         eev=PyHaier.GetEEVLevel(adv) if adv else None,
-        anomalies=_anomalies(low, ch_target, twi, two, tao, perf_val),
+        anomalies=_anomalies(low, ch_target, tao, perf_val, water_bad),
     )
 
 
-def _anomalies(low: int, ch_target: float, twi, two, tao, perf_val) -> tuple[str, ...]:
+def _water_value(name: str, raw: int, bad: list[str]) -> float | None:
+    value = _signed12(raw)
+    if WATER_RANGE[0] <= value <= WATER_RANGE[1]:
+        return value
+    bad.append(f"{name} poza zakresem: {value} °C (raw 0x{raw:03X})")
+    return None
+
+
+def _anomalies(low: int, ch_target: float, tao, perf_val, water_bad: list[str]) -> tuple[str, ...]:
     out: list[str] = []
     if low & BIT_COOL:
         out.append("bit chłodzenia ustawiony")
@@ -65,9 +88,7 @@ def _anomalies(low: int, ch_target: float, twi, two, tao, perf_val) -> tuple[str
         out.append(f"nieznane bity stanu 0x{unknown:02X}")
     if not 20 <= ch_target <= 60:
         out.append(f"temperatura zadana poza zakresem: {ch_target} °C")
-    for name, value in (("Twi", twi), ("Two", two)):
-        if value is not None and not -30 <= value <= 80:
-            out.append(f"{name} poza zakresem: {value} °C")
+    out.extend(water_bad)
     if tao is not None and not -40 <= tao <= 60:
         out.append(f"Tao poza zakresem: {tao} °C")
     if perf_val is not None and perf_val >= len(PERFORMANCE):

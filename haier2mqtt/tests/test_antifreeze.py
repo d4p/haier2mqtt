@@ -101,3 +101,20 @@ def test_dead_water_sensor_periodic_mode_does_not_escalate():
     af = Antifreeze(CFG)
     assert run(af, 0, None, 1.0) == (1, UnitState.CIRCULATE)
     assert run(af, 3600, None, 1.0)[0] == 1
+
+
+def test_decoded_negative_water_drives_stage_2():
+    from haier2mqtt.codec import decode
+    from tests.helpers import raw, status
+    r = decode(raw(status_regs=status(twi=-1.0, two=4.0)))
+    af = Antifreeze(CFG)
+    assert run(af, 0, r.water_min, 10.0) == (2, UnitState.HEAT)
+
+
+def test_decoded_garbage_water_with_cold_outdoor_drives_periodic_circulation():
+    from haier2mqtt.codec import decode
+    from tests.helpers import raw, status
+    r = decode(raw(status_regs=status(twi_raw=0x7FF, two=4.0)))
+    assert r.water_min is None
+    af = Antifreeze(CFG)
+    assert run(af, 0, r.water_min, 2.0) == (1, UnitState.CIRCULATE)

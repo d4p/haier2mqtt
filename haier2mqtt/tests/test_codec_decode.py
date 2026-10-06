@@ -53,3 +53,23 @@ def test_anomalies_cool_unknown_bits_and_ranges():
     assert "temperatura zadana poza zakresem" in text
     assert "Tao poza zakresem" in text
     assert "nieznany tryb wydajności 9" in text
+
+
+def test_decode_negative_water_temperatures():
+    r = decode(raw(status_regs=status(twi=-1.0, two=-0.5)))
+    assert (r.twi, r.two) == (-1.0, -0.5)
+    assert r.water_min == -1.0
+    assert r.anomalies == ()
+
+
+def test_decode_garbage_water_raw_is_none_with_anomaly():
+    r = decode(raw(status_regs=status(twi_raw=0x7FF, two_raw=0x900)))   # 204.7 °C, -179.2 °C
+    assert r.twi is None and r.two is None and r.water_min is None
+    text = " | ".join(r.anomalies)
+    assert "Twi poza zakresem: 204.7 °C (raw 0x7FF)" in text
+    assert "Two poza zakresem: -179.2 °C (raw 0x900)" in text
+
+
+def test_status_helper_none_is_out_of_range_not_zero():
+    r = decode(raw(status_regs=status(twi=None, two=12.0)))
+    assert r.twi is None and r.two == 12.0
