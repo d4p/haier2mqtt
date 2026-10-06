@@ -1,0 +1,86 @@
+{
+ "raw": {
+  "core": [
+   "0xDD84",
+   "0x3C1E",
+   "0x0000",
+   "0xDD01",
+   "0xDD5A",
+   "0x5C1E"
+  ],
+  "status": [
+   0,
+   0,
+   80,
+   4158,
+   57344,
+   54272,
+   35985,
+   135,
+   33536,
+   0,
+   2,
+   256,
+   0,
+   442,
+   6,
+   32776
+  ],
+  "mode": [
+   0
+  ],
+  "advanced": [
+   0,
+   10496,
+   0,
+   0,
+   0,
+   25735,
+   13313,
+   49775,
+   10549,
+   36,
+   29440,
+   31616,
+   122,
+   31246,
+   54442,
+   79,
+   0,
+   0,
+   513,
+   1862,
+   2303,
+   3840
+  ]
+ },
+ "reading": {
+  "state_low": 132,
+  "ch_target": 30.0,
+  "twi": 14.0,
+  "two": 14.5,
+  "tank": 44.2,
+  "tao": 12.2,
+  "pump_running": false,
+  "heater_on": false,
+  "defrost": false,
+  "hw_antifreeze": false,
+  "active_error": 0,
+  "last_error": 0,
+  "error_archive": [
+   7,
+   70,
+   8
+  ],
+  "performance": "eco",
+  "comp_freq": 0,
+  "comp_current": 0.0,
+  "comp_temp": 17.0,
+  "fan_rpm": 0.0,
+  "eev": 100,
+  "anomalies": [
+   "bit zbiornika CWU ustawiony"
+  ],
+  "unit_state": "standby"
+ }
+}
