@@ -79,15 +79,15 @@ async def run_set(bus, target: UnitState, cmds: Commands, confirm: Callable[[str
         if plan:
             print("target not reached")
             return 1
-    for delay in (10, 30):
-        await sleep(delay)
+    for sleep_delta, label_delta in ((10, 10), (20, 30)):
+        await sleep(sleep_delta)
         raw = await bus.read_raw()
         if raw is not None:
             r = decode(raw)
-            print(f"  after +{delay}s: state={r.unit_state.value} pump={r.pump_running} comp={r.comp_freq} Hz "
+            print(f"  after +{label_delta}s: state={r.unit_state.value} pump={r.pump_running} comp={r.comp_freq} Hz "
                   f"Twi={r.twi} Two={r.two}")
         else:
-            print(f"  after +{delay}s: unit not reachable")
+            print(f"  after +{label_delta}s: unit not reachable")
     return 0
 
 
