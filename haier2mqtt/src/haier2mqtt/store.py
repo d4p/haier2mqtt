@@ -18,12 +18,16 @@ class Store:
 
     def load(self) -> dict:
         try:
-            return json.loads(self._path.read_text())
+            data = json.loads(self._path.read_text())
         except FileNotFoundError:
             return {}
         except (OSError, ValueError) as exc:
             _LOG.warning("ignoring unreadable state file %s: %s", self._path, exc)
             return {}
+        if not isinstance(data, dict):
+            _LOG.warning("ignoring state file %s: not a JSON object", self._path)
+            return {}
+        return data
 
     def save(self, data: dict) -> None:
         tmp = self._path.with_suffix(".tmp")

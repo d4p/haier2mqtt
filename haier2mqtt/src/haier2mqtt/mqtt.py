@@ -44,9 +44,14 @@ class MqttLink:
                     await client.subscribe(f"{BASE}/set/#", qos=1)
                     self._last_svg = None
                     _LOG.info("MQTT connected to %s:%s", self._s.host, self._s.port)
-                    await asyncio.gather(self._reader(client), self._writer(client))
-            except aiomqtt.MqttError as exc:
-                _LOG.warning("MQTT disconnected: %s; retrying in 5 s", exc)
+                    async with asyncio.TaskGroup() as group:
+                        group.create_task(self._reader(client))
+                        group.create_task(self._writer(client))
+            except* aiomqtt.MqttError as eg:
+                _LOG.warning("MQTT disconnected: %s; retrying in 5 s", eg.exceptions)
+                await asyncio.sleep(5)
+            except* Exception:  # noqa: BLE001 - the link must reconnect on anything
+                _LOG.exception("MQTT link failed; retrying in 5 s")
                 await asyncio.sleep(5)
 
     async def _reader(self, client: aiomqtt.Client) -> None:
@@ -55,7 +60,7 @@ class MqttLink:
             topic = message.topic.value
             if not topic.startswith(prefix):
                 continue
-            payload = message.payload.decode("utf-8", "replace") if isinstance(message.payload, bytes) \
+            payload = message.payload.decode("utf-8", "replace") if isinstance(message.payload, (bytes, bytearray)) \
                 else str(message.payload)
             try:
                 self._on_command(topic[len(prefix):], payload)

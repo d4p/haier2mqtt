@@ -56,3 +56,48 @@ async def test_cycle_exception_does_not_kill_step(tmp_path):
     bus.read_raw = boom
     state = await app.step()
     assert state["bus_reachable"] is False
+
+
+async def test_save_failure_does_not_stop_step(tmp_path, monkeypatch):
+    app, _, _ = make(tmp_path)
+
+    def boom(_data):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(app.store, "save", boom)
+    app.handle_command("mode", "wyłączona")
+    state = await app.step()
+    assert state["mode"] == "wyłączona"
+
+
+async def test_run_survives_iteration_exception(tmp_path, monkeypatch):
+    import asyncio
+
+    import haier2mqtt.app as app_mod
+
+    app, _, _ = make(tmp_path)
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(_s):
+        await real_sleep(0)
+
+    monkeypatch.setattr(app_mod.asyncio, "sleep", fast_sleep)
+
+    class Link:
+        calls = 0
+
+        def offer(self, *args):
+            Link.calls += 1
+            if Link.calls == 1:
+                raise RuntimeError("offer failed")
+
+        async def run(self):
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(app.run(Link()))
+    for _ in range(50):
+        await real_sleep(0.001)
+        if Link.calls >= 3:
+            break
+    task.cancel()
+    assert Link.calls >= 3

@@ -53,7 +53,11 @@ class App:
     def _persist_if_changed(self) -> None:
         snap = self._persist_snapshot()
         if snap != self._persisted:
-            self.store.save(snap)
+            try:
+                self.store.save(snap)
+            except OSError:
+                _LOG.exception("could not persist state; will retry next cycle")
+                return
             self._persisted = snap
 
     def handle_command(self, suffix: str, payload: str) -> None:
@@ -86,13 +90,22 @@ class App:
         d = status.decision
         return render_svg(self.inputs.curve, d.outdoor if d else None, status.curve_target)
 
+    @staticmethod
+    def _link_done(task: asyncio.Task) -> None:
+        if not task.cancelled() and task.exception() is not None:
+            _LOG.error("MQTT link task ended unexpectedly", exc_info=task.exception())
+
     async def run(self, link: MqttLink) -> None:
         link_task = asyncio.create_task(link.run())
+        link_task.add_done_callback(self._link_done)
         try:
             while True:
-                state = await self.step()
-                link.offer(state, problems_list(state["problems"]), state["bus_reachable"],
-                           self.svg(self.controller.status))
+                try:
+                    state = await self.step()
+                    link.offer(state, problems_list(state["problems"]), state["bus_reachable"],
+                               self.svg(self.controller.status))
+                except Exception:  # noqa: BLE001 - keep the control loop alive
+                    _LOG.exception("loop iteration failed")
                 await asyncio.sleep(self.settings.poll_s)
         finally:
             link_task.cancel()

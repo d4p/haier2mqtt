@@ -56,3 +56,9 @@ def test_curve_dict_roundtrip_and_fallback():
     assert curve_from_dict(curve_to_dict(c), fallback) == c
     assert curve_from_dict({"points": "broken"}, fallback) == fallback
     assert curve_from_dict({}, fallback) == fallback
+
+
+def test_store_load_non_dict_json_returns_empty(tmp_path):
+    p = tmp_path / "state.json"
+    p.write_text("[]")
+    assert Store(p).load() == {}
