@@ -111,3 +111,10 @@ def test_encode_ch_temp_rejects_unsafe_values():
             encode_ch_temp(c, bad, CMDS)
     assert encode_ch_temp(c, 20.0, CMDS).expected == 40
     assert encode_ch_temp(c, 55.0, CMDS).expected == 110
+
+
+def test_mask_like_pyhaier_masks_only_104_and_105():
+    from haier2mqtt.codec import mask_like_pyhaier
+    values = (0x0105, 0x3B1E, 0x0000, 0xDD01, 0xDD5A, 0x5C1E)
+    assert mask_like_pyhaier(values) == (0x0105, 0x3B1E, 0x0000, 0x0001, 0x005A, 0x5C1E)
+    assert mask_like_pyhaier((0x0101,)) == (0x0101,)                 # not a full 101-106 block: unchanged

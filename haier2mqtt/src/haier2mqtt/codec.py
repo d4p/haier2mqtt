@@ -176,6 +176,19 @@ def encode_performance(name: str) -> Write:
     return Write("performance", 201, (0x100 | n,), "mode0_low", n)
 
 
+def mask_like_pyhaier(values: tuple[int, ...]) -> tuple[int, ...]:
+    """PyHaier-style 101-106 block: register 104 sent as value & 0x0F, 105 as value & 0xFF.
+
+    Diagnostics only (probe --mask-104-105); the controller copies 102-106 unchanged.
+    """
+    if len(values) != CORE_LEN:
+        return tuple(values)
+    v = list(values)
+    v[3] &= 0x0F
+    v[4] &= 0xFF
+    return tuple(v)
+
+
 def verify(write: Write, core_after: list[int] | None, mode_after: list[int] | None) -> bool:
     """Check the read-back. Never compares the register-101 high byte (unit reports 0xDD)."""
     if write.check == "core0_low":

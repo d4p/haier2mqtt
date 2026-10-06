@@ -4,7 +4,7 @@ from unittest.mock import patch
 from haier2mqtt.codec import Commands
 from haier2mqtt.codec import plan_state_writes as real_plan_state_writes
 from haier2mqtt.model import UnitState
-from haier2mqtt.probe import byte_value, run_set
+from haier2mqtt.probe import byte_value, run_set, run_set_ch, run_set_performance
 from tests.fakes import FakeBus
 from tests.helpers import core, status
 
@@ -148,3 +148,74 @@ def test_byte_value_invalid():
         byte_value("256")
     with pytest.raises(argparse.ArgumentTypeError):
         byte_value("abc")
+
+
+# --- register diff / --mask-104-105 / set-ch / set-performance ---
+
+
+async def test_run_set_prints_register_diff_and_keeps_104_105_by_default(capsys):
+    bus = FakeBus(core(state_low=0x04), status())
+    assert await run_set(bus, UnitState.HEAT, Commands(), confirm=lambda _q: True, sleep=nosleep) == 0
+    assert bus.writes[0][1][3:5] == (0xDD01, 0xDD5A)
+    out = capsys.readouterr().out
+    assert "101: 0xDD04 -> 0xDD05 *" in out and "104: 0xDD01 -> 0xDD01" in out and "201:" in out
+
+
+async def test_run_set_mask_104_105_sends_pyhaier_style_values():
+    bus = FakeBus(core(state_low=0x04), status())
+    assert await run_set(bus, UnitState.HEAT, Commands(), confirm=lambda _q: True, sleep=nosleep,
+                         mask_104_105=True) == 0
+    assert bus.writes[0][1][3:5] == (0x0001, 0x005A)
+
+
+async def test_set_ch_success(capsys):
+    bus = FakeBus(core(state_low=0x05, ch=29.5), status())
+    code = await run_set_ch(bus, 32.0, Commands(), confirm=lambda _q: True, sleep=nosleep)
+    assert code == 0 and bus.core[1] >> 8 == 64
+    assert len(bus.writes) == 1 and bus.writes[0][1][0] == 0x0405
+    out = capsys.readouterr().out
+    assert "planned ch_temp" in out and "OK" in out and "102: 0x3B1E -> 0x401E *" in out
+
+
+async def test_set_ch_respects_mask_and_custom_command():
+    bus = FakeBus(core(state_low=0x05, ch=29.5), status(), accept=lambda cmd, low: True)
+    await run_set_ch(bus, 32.0, Commands(ch_temp=0x04), confirm=lambda _q: True, sleep=nosleep, mask_104_105=True)
+    assert bus.writes[0][1][3:5] == (0x0001, 0x005A)
+
+
+async def test_set_ch_abort_writes_nothing():
+    bus = FakeBus(core(state_low=0x05, ch=29.5), status())
+    assert await run_set_ch(bus, 32.0, Commands(), confirm=lambda _q: False, sleep=nosleep) == 2
+    assert bus.writes == []
+
+
+async def test_set_ch_rejection(capsys):
+    bus = FakeBus(core(state_low=0x05, ch=29.5), status(), accept=lambda cmd, low: False)
+    assert await run_set_ch(bus, 32.0, Commands(), confirm=lambda _q: True, sleep=nosleep) == 1
+    assert len(bus.writes) == 1 and "REJECTED" in capsys.readouterr().out
+
+
+async def test_set_ch_out_of_range_writes_nothing():
+    bus = FakeBus(core(state_low=0x05, ch=29.5), status())
+    assert await run_set_ch(bus, 60.0, Commands(), confirm=lambda _q: True, sleep=nosleep) == 1
+    assert bus.writes == []
+
+
+async def test_set_performance_success(capsys):
+    bus = FakeBus(core(), status(), mode=(0,))
+    code = await run_set_performance(bus, "turbo", confirm=lambda _q: True, sleep=nosleep)
+    assert code == 0 and bus.mode == [2] and bus.writes == [(201, (0x0102,))]
+    out = capsys.readouterr().out
+    assert "planned performance" in out and "OK" in out and "201: 0x0000 -> 0x0002 *" in out
+
+
+async def test_set_performance_abort_writes_nothing():
+    bus = FakeBus(core(), status(), mode=(0,))
+    assert await run_set_performance(bus, "quiet", confirm=lambda _q: False, sleep=nosleep) == 2
+    assert bus.writes == []
+
+
+async def test_set_performance_rejection(capsys):
+    bus = FakeBus(core(), status(), mode=(0,), accept_mode=lambda v: False)
+    assert await run_set_performance(bus, "quiet", confirm=lambda _q: True, sleep=nosleep) == 1
+    assert "REJECTED" in capsys.readouterr().out
