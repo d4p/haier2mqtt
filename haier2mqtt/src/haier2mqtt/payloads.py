@@ -61,7 +61,7 @@ def apply_command(suffix: str, payload: str, inputs: Inputs, initial_curve: Curv
         raise ValueError(f"unknown command {suffix!r}")
     except CurveError as exc:
         return CommandResult(error=str(exc))
-    except (ValueError, KeyError, TypeError) as exc:
+    except (ValueError, KeyError, TypeError, OverflowError, AttributeError) as exc:
         return CommandResult(error=f"niepoprawne polecenie {suffix}: {exc}")
 
 
@@ -73,8 +73,15 @@ def _curve_command(suffix: str, payload: str, inputs: Inputs, initial_curve: Cur
         new = replace(c, points=parse_points(payload))
     elif suffix == "curve_limits":
         d = json.loads(payload)
-        new = replace(c, min_water=_number(str(d.get("min", c.min_water))),
-                      max_water=_number(str(d.get("max", c.max_water))))
+        if not isinstance(d, dict):
+            raise ValueError("curve_limits must be a dict")
+        min_val = d.get("min", c.min_water)
+        max_val = d.get("max", c.max_water)
+        if isinstance(min_val, bool) or not isinstance(min_val, (int, float)) or not math.isfinite(min_val):
+            raise ValueError("min must be a finite number")
+        if isinstance(max_val, bool) or not isinstance(max_val, (int, float)) or not math.isfinite(max_val):
+            raise ValueError("max must be a finite number")
+        new = replace(c, min_water=float(min_val), max_water=float(max_val))
     else:
         new = initial_curve
     inputs.curve = validate(new)
@@ -196,11 +203,11 @@ def discovery_messages(prefix: str = "homeassistant") -> list[tuple[str, dict]]:
     add("select", "tryb", {**_base("select", "tryb", "Tryb pracy"), "state_topic": state,
                            "value_template": "{{ value_json.mode }}", "command_topic": f"{BASE}/set/mode",
                            "options": list(MODES), "availability": [AVAIL_SERVICE], "icon": "mdi:cog"})
-    unit_avail.pop("expire_after")          # selects/numbers/text do not accept expire_after
+    unit_avail_no_expire = {k: v for k, v in unit_avail.items() if k != "expire_after"}
     add("select", "wydajnosc", {**_base("select", "wydajnosc", "Tryb wydajności"), "state_topic": state,
                                 "value_template": "{{ value_json.performance }}",
                                 "command_topic": f"{BASE}/set/performance", "options": list(PERFORMANCE),
-                                **unit_avail, "icon": "mdi:speedometer"})
+                                **unit_avail_no_expire, "icon": "mdi:speedometer"})
     add("number", "krzywa_przesuniecie", {**_base("number", "krzywa_przesuniecie", "Krzywa – przesunięcie"),
                                           "state_topic": state, "value_template": "{{ value_json.curve_offset }}",
                                           "command_topic": f"{BASE}/set/curve_offset", "min": -5, "max": 5,

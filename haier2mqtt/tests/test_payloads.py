@@ -38,18 +38,22 @@ def test_mode_performance_offset_points_limits_reset():
 def test_malformed_commands_are_rejected():
     # Review Focus 5
     i = inputs()
-    before = (i.mode, i.demand, i.curve)
+    before = (i.mode, i.demand, i.demand_at, i.forecast, i.forecast_at, i.performance_request, i.curve)
     assert apply_command("demand", '{"demand": "on"}', i, INITIAL, 1).error
     assert apply_command("demand", "not json", i, INITIAL, 1).error
     assert apply_command("outdoor_forecast", '{"value": "x"}', i, INITIAL, 1).error
+    assert apply_command("outdoor_forecast", '{"value": ' + "9"*400 + '}', i, INITIAL, 1).error
     assert apply_command("mode", "turbo", i, INITIAL, 1).error
     assert apply_command("performance", "boost", i, INITIAL, 1).error
     r = apply_command("curve_offset", "NaN", i, INITIAL, 1)
     assert r.error and r.curve_changed is False
     r = apply_command("curve_points", "10:29, 0:32", i, INITIAL, 1)
     assert "posortowane" in r.error
+    assert apply_command("curve_limits", "[1]", i, INITIAL, 1).error
+    assert apply_command("curve_limits", "5", i, INITIAL, 1).error
+    assert apply_command("curve_limits", '{"min": "27"}', i, INITIAL, 1).error
     assert apply_command("unknown_topic", "1", i, INITIAL, 1).error
-    assert (i.mode, i.demand, i.curve) == before
+    assert (i.mode, i.demand, i.demand_at, i.forecast, i.forecast_at, i.performance_request, i.curve) == before
 
 
 def test_state_payload_shape():
@@ -78,3 +82,40 @@ def test_discovery_covers_entities_and_problem_sensors():
         assert topic.startswith("homeassistant/") and topic.endswith("/config")
         assert payload["device"]["identifiers"] == ["haier2mqtt"]
         assert payload["unique_id"].startswith("haier2mqtt_")
+
+
+def test_discovery_keys_valid_per_platform():
+    msgs = discovery_messages()
+    for topic, payload in msgs:
+        # Extract component from topic: homeassistant/{component}/...
+        component = topic.split("/")[1]
+
+        # expire_after only for sensor/binary_sensor
+        if "expire_after" in payload:
+            assert component in ("sensor", "binary_sensor"), f"expire_after in {component}: {topic}"
+
+        # json_attributes_topic/json_attributes_template only for sensor/binary_sensor
+        for key in ("json_attributes_topic", "json_attributes_template"):
+            if key in payload:
+                assert component in ("sensor", "binary_sensor"), f"{key} in {component}: {topic}"
+
+        # command_template only for number
+        if "command_template" in payload:
+            assert component == "number", f"command_template in {component}: {topic}"
+
+        # payload_press only for button
+        if "payload_press" in payload:
+            assert component == "button", f"payload_press in {component}: {topic}"
+
+        # image_topic/content_type only for image
+        for key in ("image_topic", "content_type"):
+            if key in payload:
+                assert component == "image", f"{key} in {component}: {topic}"
+
+        # options only for select (and enum sensors, but we only have select)
+        if "options" in payload:
+            assert component in ("select", "sensor"), f"options in {component}: {topic}"
+
+        # select/number/text/button/image must not have expire_after
+        if component in ("select", "number", "text", "button", "image"):
+            assert "expire_after" not in payload, f"expire_after in {component}: {topic}"
