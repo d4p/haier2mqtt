@@ -99,7 +99,11 @@ The command byte for each write is confirmed in rollout step 2. Until then, writ
 - Only antifreeze stage 2 may skip the minimum off time.
 
 ### Heating curve
-- Points (from the current config): −20 → 40, 0 → 32, 10 → 29, 20 → 28 °C. Linear interpolation, flat beyond the ends, clamped to 25–45 °C, plus an **offset** of −5 to +5 °C (HA-settable).
+- **Fully configurable at runtime from HA**, not only by offset. The curve is a list of 2–8 points `outdoor °C → water °C`. Linear interpolation between points, flat beyond the ends.
+  - Editable from HA: the point list, the water-temperature limits (min/max, default 25–45 °C) and an **offset** (−5 to +5 °C).
+  - The service validates every change: points sorted by outdoor temperature, unique outdoor values, water values within the limits, and water not rising with outdoor temperature. An invalid change is rejected, the previous curve stays active, and a problem `curve_rejected` is raised.
+  - The accepted curve is persisted in `/data`. The add-on options only provide the **initial** curve (first start, or after a reset).
+- Initial points (from the current `ha_haier` config): −20 → 40, 0 → 32, 10 → 29, 20 → 28 °C.
 - Outdoor input: the HA forecast (`set/outdoor_forecast`). It is stale after 30 min; then use Tao.
 - The CH target is written only in `HEAT`, and only when the change is ≥ 0.5 °C and ≥ 20 min have passed since the last curve write. There is no wait when entering `HEAT`.
 
@@ -107,13 +111,14 @@ The command byte for each write is confirmed in rollout step 2. Until then, writ
 Inputs: Twi and Two (water in the outdoor unit) and Tao. The tank temperature is shown but not used (indoors).
 
 - **Stage 1:**
-  - Trigger: Tao < 0 °C → `CIRCULATE` 5 min every 30 min.
+  - Trigger: Tao < **+3 °C** → `CIRCULATE` 5 min every 30 min. The 3 °C margin covers an outdoor sensor that sits in a warmer spot or reads high.
   - Trigger: min(Twi, Two) < 5 °C → `CIRCULATE` continuously.
 - **Stage 2:**
   - Trigger: water < 3 °C, **or** water still falling after 10 min of circulation, **or** the pump-only write fails.
   - Action: `HEAT` at 30 °C.
 - **Exit:** both Twi and Two > 10 °C for 5 min → back to the otherwise-desired state.
-- **Missing water readings** while the bus works and Tao < 0 °C (or Tao is missing and the HA outdoor input < 0 °C): periodic circulation as in stage 1.
+- **Missing water readings** while the bus works and Tao < +3 °C (or Tao is missing and the HA outdoor input < +3 °C): periodic circulation as in stage 1.
+- The outdoor threshold (+3 °C) is the outdoor-start option and can be changed; it is used everywhere frost risk is assessed.
 - All thresholds and timings are add-on options.
 
 ## 5. MQTT interface
@@ -131,13 +136,16 @@ Base topic `haier2mqtt`. Discovery prefix `homeassistant`. One device: "Pompa ci
 | `haier2mqtt/set/mode` | in | `auto` / `wyłączona` / `grzanie` (persisted) |
 | `haier2mqtt/set/performance` | in | `eco` / `quiet` / `turbo` (register 201) |
 | `haier2mqtt/set/curve_offset` | in | −5 … +5 (persisted) |
+| `haier2mqtt/set/curve_points` | in | text `"-20:40, 0:32, 10:29, 20:28"` (persisted after validation) |
+| `haier2mqtt/set/curve_limits` | in | `{"min": 25, "max": 45}` (persisted after validation) |
+| `haier2mqtt/set/curve_reset` | in | any payload → restore the initial curve from add-on options |
 
 Entities use availability = service online AND bus reachable.
 - **Temperatures:** Twi, Two, tank, Tao, CH target, curve target, compressor.
 - **Operation:** actual state, desired state, reason (`antifreeze` / `tryb` / `zapotrzebowanie` / `fallback`), antifreeze stage, curve input source (`prognoza` / `Tao`), compressor frequency and current, fan rpm, EEV.
 - **Binary:** internal pump running, compressor running, defrost, hardware antifreeze, problem, bus reachable, heartbeat OK.
 - **Faults:** active error, last error, error archive, last write result.
-- **Controls:** mode, performance, curve offset.
+- **Controls:** mode, performance, curve offset, curve points (text entity), curve min/max water temperature (numbers), "reset curve" (button). The current curve is also published as JSON in `state` so the dashboard can draw it.
 
 Add-on options:
 - gateway host, port, slave ID
@@ -162,6 +170,7 @@ Add-on options:
 | `write_failed` | read-back mismatch after 3 retries | warning |
 | `state_mismatch` | actual ≠ desired for > 15 min | warning |
 | `heartbeat_lost` | no demand message for > 10 min | warning |
+| `curve_rejected` | an invalid curve change was received (reason in message) | warning |
 
 ## 7. Home Assistant side
 - `input_select.zrodlo_ciepla`: Haier / Vaillant.
@@ -177,7 +186,8 @@ Add-on options:
 - **Dashboard `dashboard-ogrzewanie`:**
   - Haier box: actual state, reason, Twi/Two, tank temperature, ⚠ on any problem.
   - Heading: source selector.
-  - Haier pop-up: mode, curve offset, performance, desired vs actual state, antifreeze stage, last write, error codes, active problems, 24 h chart.
+  - Haier pop-up: mode, performance, desired vs actual state, antifreeze stage, last write, error codes, active problems, 24 h chart.
+  - **Heating curve** section in the pop-up: the point list (editable), min/max limits, offset, reset button, and a chart of the curve with a marker at the current outdoor temperature and the current target.
 - **Grafana:** re-run `tools/grafana_dashboards.py` with the new entities later.
 - **Cutover:** delete the `ha_haier` entry, remove `d4p/ha_haier` via HACS.
 
@@ -198,7 +208,7 @@ docs/superpowers/specs/
 **Automated tests** (pytest, CI):
 - `codec`: every target state against real register dumps (`0xDD84` …). Regression test: an "off" request on an already-off unit still encodes `STANDBY`, never `0x83`.
 - `controller` and `antifreeze`: simulated time. Covers demand changes, delayed (not dropped) commands, heartbeat loss leading to fallback, antifreeze stages 1→2→exit, write failures and retries, stray tank/cool bit corrected, mode overrides.
-- `curve`: interpolation, clamping, offset, forecast staleness leading to Tao.
+- `curve`: interpolation, clamping, offset, forecast staleness leading to Tao, validation (unsorted, duplicate, out-of-limit and rising curves rejected; previous curve kept), persistence and reset.
 - `bus`: a fake Modbus server covering timeouts, partial answers, reconnect, and no stale data.
 
 **Rollout:**
@@ -209,7 +219,7 @@ docs/superpowers/specs/
 5. **Before the first frost:** temporarily raise the antifreeze thresholds to trigger stage 1 and stage 2 at current temperatures, then restore them.
 
 ## 10. Out of scope
-- Optimising weather, tank and thermostats (only the hooks: curve offset, mode).
+- Optimising weather, tank and thermostats (only the hooks: the runtime-configurable curve, offset and mode).
 - Choosing the heat source automatically (stays manual).
 - Hot water on the Haier.
 - An external watchdog for HA VM outages.
