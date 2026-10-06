@@ -102,3 +102,12 @@ def test_verify_ch_temp_and_performance():
     assert not verify(w, list(core(ch=29.5)), None)
     p = encode_performance("quiet")
     assert verify(p, None, [0x0001]) and not verify(p, None, [0x0000])
+
+
+def test_encode_ch_temp_rejects_unsafe_values():
+    c = list(core())
+    for bad in (19.5, 55.5, float("nan"), float("inf"), -float("inf")):
+        with pytest.raises(ValueError):
+            encode_ch_temp(c, bad, CMDS)
+    assert encode_ch_temp(c, 20.0, CMDS).expected == 40
+    assert encode_ch_temp(c, 55.0, CMDS).expected == 110

@@ -5,6 +5,7 @@ Register 101: low byte = state bits, high byte = command code on write / 0xDD on
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import PyHaier
@@ -157,7 +158,12 @@ def ch_temp_matches(core: list[int], temp: float) -> bool:
     return (core[1] >> 8) == _temp_byte(temp)
 
 
+CH_TEMP_RANGE = (20.0, 55.0)
+
+
 def encode_ch_temp(core: list[int], temp: float, cmds: Commands) -> Write:
+    if not (math.isfinite(temp) and CH_TEMP_RANGE[0] <= temp <= CH_TEMP_RANGE[1]):
+        raise ValueError(f"CH temperature {temp} °C outside {CH_TEMP_RANGE[0]:g}-{CH_TEMP_RANGE[1]:g} °C")
     hb = _temp_byte(temp)
     values = ((cmds.ch_temp & 0xFF) << 8 | (core[0] & 0xFF), hb << 8 | (core[1] & 0xFF), *core[2:6])
     return Write("ch_temp", 101, values, "core1_high", hb)

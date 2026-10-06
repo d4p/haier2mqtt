@@ -282,3 +282,27 @@ async def test_stray_on_state_while_running_is_not_held():
     st = await ctrl.cycle()
     assert st.effective is UnitState.STANDBY and st.delayed_until is None
     assert bus.core[0] & 0xFF == 0x04
+
+
+async def test_unencodable_ch_target_is_a_failed_ch_write_not_a_crash():
+    ctrl, bus, clock, inputs = make(tao=10.0)
+    inputs.curve = Curve(parse_points("-20:58, 20:58"), 25, 58)    # 58 °C is outside the 20-55 °C guard
+    demand(inputs, clock, True)
+    st = await ctrl.cycle()
+    assert st.write_failed is True and st.last_write.startswith("ok: heat")
+    assert all(v[0] >> 8 != 0x04 for _, v in bus.writes)            # no CH write sent
+    assert bus.core[0] & 0xFF == 0x05                               # heating still started
+
+
+async def test_performance_request_changed_during_write_survives():
+    ctrl, bus, _clock, inputs = make()
+    inputs.performance_request = "quiet"
+    real_write = bus.write
+
+    async def write_and_change(address, values):
+        await real_write(address, values)
+        inputs.performance_request = "turbo"                        # newer request arrives mid-write
+
+    bus.write = write_and_change
+    await ctrl.cycle()
+    assert bus.mode == [1] and inputs.performance_request == "turbo"

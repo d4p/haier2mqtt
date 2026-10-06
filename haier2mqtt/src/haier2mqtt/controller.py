@@ -255,6 +255,14 @@ class Controller:
             return
         if now < self._next_ch_retry and not urgent:
             return
+        try:
+            encode_ch_temp(list(st.raw.core), t, self.cmds)
+        except ValueError as exc:
+            _LOG.error("CH write not sent: %s", exc)
+            self._failed["ch"] = True
+            st.last_write = f"błąd: temperatura {t:g} °C"
+            self._next_ch_retry = now + self.cfg.retry_backoff_s
+            return
         planner = lambda core: [] if ch_temp_matches(core, t) else [encode_ch_temp(core, t, self.cmds)]
         if await self._execute(planner):
             self._failed["ch"] = False
@@ -280,7 +288,8 @@ class Controller:
         ok = await self._execute(lambda core: [write], verify_mode=True)
         self.status.last_write = f"{'ok' if ok else 'błąd'}: wydajność {name}"
         if ok:
-            self.inputs.performance_request = None
+            if self.inputs.performance_request == name:     # a newer request during the write stays pending
+                self.inputs.performance_request = None
             self._failed["performance"] = False
         else:
             self._failed["performance"] = True
