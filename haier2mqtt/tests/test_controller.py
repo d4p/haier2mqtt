@@ -14,12 +14,14 @@ async def nosleep(_s):
     return None
 
 
-def make(state_low=0x04, ch=29.5, cfg=LIVE, tao=13.8, twi=15.0, two=15.5, accept=None, last_auto=UnitState.STANDBY):
-    bus = FakeBus(core(state_low=state_low, ch=ch), status(twi=twi, two=two), advanced=advanced(tao=tao), accept=accept)
+def make(state_low=0x04, ch=29.5, cfg=LIVE, tao=13.8, twi=15.0, two=15.5, accept=None, last_auto=UnitState.STANDBY,
+         startup_settled=True, accept_mode=None):
+    bus = FakeBus(core(state_low=state_low, ch=ch), status(twi=twi, two=two), advanced=advanced(tao=tao), accept=accept,
+                  accept_mode=accept_mode)
     clock = FakeClock(10_000)
     inputs = Inputs(curve=CURVE)
     ctrl = Controller(bus, Commands(), cfg, Antifreeze(AntifreezeConfig()), inputs, last_auto=last_auto,
-                      clock=clock, sleep=nosleep)
+                      startup_settled=startup_settled, clock=clock, sleep=nosleep)
     return ctrl, bus, clock, inputs
 
 
@@ -160,6 +162,93 @@ async def test_performance_request_is_applied_once():
 
 async def test_mismatch_since_tracks_actual_vs_effective():
     ctrl, _bus, clock, inputs = make(accept=lambda cmd, low: False)
+    t0 = clock()
     demand(inputs, clock, True)
     st = await ctrl.cycle()
-    assert st.mismatch_since == clock()
+    assert st.mismatch_since == t0
+    clock.advance(60)
+    demand(inputs, clock, True)
+    st = await ctrl.cycle()
+    assert st.mismatch_since == t0
+
+
+async def test_mismatch_since_clears_after_successful_write():
+    ctrl, _bus, clock, inputs = make()
+    demand(inputs, clock, True)
+    st = await ctrl.cycle()
+    assert st.mismatch_since is None or st.mismatch_since == clock()
+    clock.advance(10)
+    demand(inputs, clock, True)
+    st = await ctrl.cycle()
+    assert st.mismatch_since is None
+
+
+async def test_ch_write_failure_does_not_block_heating():
+    ctrl, bus, clock, inputs = make(tao=10.0, ch=25.0, accept=lambda cmd, low: cmd != 0x04)
+    demand(inputs, clock, True)
+    st = await ctrl.cycle()
+    assert bus.core[0] & 0xFF == 0x05
+    assert st.write_failed is True
+
+
+async def test_ch_failure_keeps_write_failed_while_heating():
+    ctrl, _bus, clock, inputs = make(state_low=0x05, tao=10.0, ch=25.0, accept=lambda cmd, low: cmd != 0x04)
+    demand(inputs, clock, True)
+    st = await ctrl.cycle()
+    assert st.write_failed is True
+    clock.advance(60)
+    demand(inputs, clock, True)
+    st = await ctrl.cycle()
+    assert st.write_failed is True
+
+
+async def test_failed_performance_is_retried_after_backoff():
+    accepting = {"on": False}
+    ctrl, bus, clock, inputs = make(accept_mode=lambda v: accepting["on"])
+    inputs.performance_request = "quiet"
+    st = await ctrl.cycle()
+    assert inputs.performance_request == "quiet" and st.write_failed is True
+    n = len(bus.writes)
+    clock.advance(60)
+    await ctrl.cycle()
+    assert len(bus.writes) == n                          # backing off
+    clock.advance(300)
+    accepting["on"] = True
+    st = await ctrl.cycle()
+    assert inputs.performance_request is None and st.write_failed is False
+    assert bus.mode == [1]
+
+
+async def test_restart_while_heating_holds_min_on():
+    ctrl, _bus, clock, inputs = make(state_low=0x05, startup_settled=False)
+    demand(inputs, clock, False)
+    st = await ctrl.cycle()
+    assert st.effective is UnitState.HEAT and st.delayed_until is not None
+    clock.advance(1200)
+    demand(inputs, clock, False)
+    st = await ctrl.cycle()
+    assert st.effective is UnitState.STANDBY
+
+
+async def test_restart_in_standby_delays_heat_by_min_off():
+    ctrl, _bus, clock, inputs = make(state_low=0x04, startup_settled=False)
+    demand(inputs, clock, True)
+    st = await ctrl.cycle()
+    assert st.effective is UnitState.STANDBY and st.delayed_until is not None
+    clock.advance(600)
+    demand(inputs, clock, True)
+    st = await ctrl.cycle()
+    assert st.effective is UnitState.HEAT
+
+
+async def test_antifreeze_circulation_continues_while_heat_waits_for_min_off():
+    ctrl, bus, clock, inputs = make(state_low=0x05)
+    demand(inputs, clock, False)
+    await ctrl.cycle()                                   # -> standby
+    await ctrl.cycle()                                   # observe STANDBY
+    bus.status = status(twi=4.5, two=4.8)
+    bus.advanced = advanced(tao=1.0)
+    clock.advance(30)
+    demand(inputs, clock, True)
+    st = await ctrl.cycle()
+    assert st.effective is UnitState.CIRCULATE and st.delayed_until is not None

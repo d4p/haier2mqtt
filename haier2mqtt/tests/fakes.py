@@ -66,12 +66,13 @@ class FakeClock:
 class FakeBus:
     """Simulated unit: applies register-101 commands the way the real unit is assumed to (reports 0xDD high byte)."""
 
-    def __init__(self, core, status, mode=(0,), advanced=None, accept=None) -> None:
+    def __init__(self, core, status, mode=(0,), advanced=None, accept=None, accept_mode=None) -> None:
         self.core = list(core)
         self.status = tuple(status)
         self.mode = [mode[0]]
         self.advanced = advanced
         self.accept = accept or (lambda cmd, low: True)
+        self.accept_mode = accept_mode or (lambda value: True)
         self.writes: list[tuple[int, tuple[int, ...]]] = []
         self.fail_read = False
         self.fail_writes = False
@@ -107,5 +108,5 @@ class FakeBus:
                     self.core[1] = values[1]
                 else:
                     self.core[0] = 0xDD00 | low
-        elif address == 201:
+        elif address == 201 and self.accept_mode(values[0] & 0xFF):
             self.mode = [values[0] & 0xFF]

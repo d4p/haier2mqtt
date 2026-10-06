@@ -113,7 +113,7 @@ class Status:
 
 class Controller:
     def __init__(self, bus, cmds: Commands, cfg: ControlConfig, antifreeze: Antifreeze, inputs: Inputs,
-                 last_auto: UnitState = UnitState.STANDBY,
+                 last_auto: UnitState = UnitState.STANDBY, startup_settled: bool = False,
                  clock: Callable[[], float] = time.monotonic,
                  sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
         self._bus = bus
@@ -126,8 +126,12 @@ class Controller:
         self._sleep = sleep
         self._heat_since = -math.inf
         self._off_since = -math.inf
+        self._startup_settled = startup_settled
         self._prev_actual: UnitState | None = None
         self._next_retry = -math.inf
+        self._next_ch_retry = -math.inf
+        self._next_perf_retry = -math.inf
+        self._failed = {"state": False, "ch": False, "performance": False}
         self.status = Status()
 
     async def cycle(self) -> Status:
@@ -167,7 +171,8 @@ class Controller:
         urgent = dec.reason == "antifreeze" and effective is UnitState.HEAT   # emergency heat ignores backoff
         await self._reconcile_ch(now, dec, effective, reading, urgent)
         await self._reconcile_state(now, effective, urgent)
-        await self._apply_performance()
+        await self._apply_performance(now)
+        st.write_failed = any(self._failed.values())
 
         if actual is not effective:
             st.mismatch_since = st.mismatch_since if st.mismatch_since is not None else now
@@ -177,6 +182,11 @@ class Controller:
 
     def _track_actual(self, now: float, actual: UnitState) -> None:
         prev = self._prev_actual
+        if prev is None and not self._startup_settled:
+            if actual is UnitState.HEAT:
+                self._heat_since = now
+            else:
+                self._off_since = now
         if prev is not None and prev is not actual:
             if actual is UnitState.HEAT:
                 self._heat_since = now
@@ -193,6 +203,8 @@ class Controller:
         if actual is not UnitState.HEAT and t is UnitState.HEAT and dec.reason != "antifreeze":
             until = self._off_since + self.cfg.min_off_s
             if now < until:
+                if self.af.wants(now) is UnitState.CIRCULATE:
+                    return UnitState.CIRCULATE, until
                 return actual, until
         return t, None
 
@@ -201,7 +213,7 @@ class Controller:
         planner = lambda core: plan_state_writes(core, effective, self.cmds)
         pending = planner(list(st.raw.core))
         if not pending:
-            st.write_failed = False
+            self._failed["state"] = False
             return
         if not self.cfg.writes_enabled:
             st.shadow_writes = st.shadow_writes + tuple(f"{w.what}:0x{w.values[0]:04X}" for w in pending)
@@ -209,12 +221,12 @@ class Controller:
         if now < self._next_retry and not urgent:
             return
         if await self._execute(planner):
-            st.write_failed = False
+            self._failed["state"] = False
             st.last_write = f"ok: {effective.value}"
             if effective is UnitState.CIRCULATE:
                 self.af.pump_failed = False
         else:
-            st.write_failed = True
+            self._failed["state"] = True
             st.last_write = f"błąd: {effective.value}"
             self._next_retry = now + self.cfg.retry_backoff_s
             if effective is UnitState.CIRCULATE:
@@ -225,6 +237,7 @@ class Controller:
         st = self.status
         t = dec.ch_target
         if effective is not UnitState.HEAT or t is None or ch_temp_matches(list(st.raw.core), t):
+            self._failed["ch"] = False
             return
         entering = reading.unit_state is not UnitState.HEAT
         emergency = dec.reason == "antifreeze"
@@ -236,30 +249,38 @@ class Controller:
         if not self.cfg.writes_enabled:
             st.shadow_writes = st.shadow_writes + (f"ch_temp:{t:g}",)
             return
-        if now < self._next_retry and not urgent:
+        if now < self._next_ch_retry and not urgent:
             return
         planner = lambda core: [] if ch_temp_matches(core, t) else [encode_ch_temp(core, t, self.cmds)]
         if await self._execute(planner):
+            self._failed["ch"] = False
             st.last_curve_write = now
             st.last_write = f"ok: temperatura {t:g} °C"
         else:
-            st.write_failed = True
+            self._failed["ch"] = True
             st.last_write = f"błąd: temperatura {t:g} °C"
-            self._next_retry = now + self.cfg.retry_backoff_s
+            self._next_ch_retry = now + self.cfg.retry_backoff_s
 
-    async def _apply_performance(self) -> None:
+    async def _apply_performance(self, now: float) -> None:
         name = self.inputs.performance_request
         if name is None:
+            self._failed["performance"] = False
             return
-        self.inputs.performance_request = None
         if not self.cfg.writes_enabled:
+            self.inputs.performance_request = None
             self.status.shadow_writes = self.status.shadow_writes + (f"performance:{name}",)
+            return
+        if now < self._next_perf_retry:
             return
         write = encode_performance(name)
         ok = await self._execute(lambda core: [write], verify_mode=True)
         self.status.last_write = f"{'ok' if ok else 'błąd'}: wydajność {name}"
-        if not ok:
-            self.status.write_failed = True
+        if ok:
+            self.inputs.performance_request = None
+            self._failed["performance"] = False
+        else:
+            self._failed["performance"] = True
+            self._next_perf_retry = now + self.cfg.retry_backoff_s
 
     async def _execute(self, planner: Callable[[list[int]], list[Write]], verify_mode: bool = False) -> bool:
         """Run planned writes one at a time with fresh reads and read-back checks; retry the whole plan."""
@@ -277,8 +298,11 @@ class Controller:
                         core_after = list(await tx.read_core())
                         mode_after = list(await tx.read_mode()) if w.check == "mode0_low" else None
                         if not verify(w, core_after, mode_after):
-                            _LOG.warning("write %s rejected (attempt %d): wrote 0x%04X, read 0x%04X",
-                                         w.what, attempt, w.values[0], core_after[0])
+                            seen = {"core0_low": core_after[0], "core1_high": core_after[1],
+                                    "mode0_low": mode_after[0] if mode_after else None}[w.check]
+                            _LOG.warning("write %s rejected (attempt %d): wrote 0x%04X, read %s (%s)",
+                                         w.what, attempt, w.values[0],
+                                         "?" if seen is None else f"0x{seen:04X}", w.check)
                             break
                         _LOG.info("write %s ok: 0x%04X", w.what, w.values[0])
                         core = core_after
