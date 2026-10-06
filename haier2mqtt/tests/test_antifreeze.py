@@ -76,3 +76,28 @@ def test_unknown_everything_circulates_periodically():
     af = Antifreeze(CFG)
     assert run(af, 0, None, None) == (1, UnitState.CIRCULATE)
     assert run(af, 301, None, None) == (1, None)
+
+
+def test_nan_inputs_treated_as_unknown():
+    af = Antifreeze(CFG)
+    assert run(af, 0, float("nan"), float("nan")) == (1, UnitState.CIRCULATE)
+
+
+def test_unknown_outdoor_with_warm_water_still_circulates_periodically():
+    af = Antifreeze(CFG)
+    assert run(af, 0, 20.0, None) == (1, UnitState.CIRCULATE)
+    assert run(af, 301, 20.0, None) == (1, None)
+
+
+def test_water_dropout_during_continuous_circulation_escalates():
+    af = Antifreeze(CFG)
+    assert run(af, 0, 4.5, 5.0)[0] == 1
+    assert run(af, 100, None, 5.0) == (1, UnitState.CIRCULATE)
+    assert run(af, 699, None, 5.0)[0] == 1
+    assert run(af, 701, None, 5.0) == (2, UnitState.HEAT)
+
+
+def test_dead_water_sensor_periodic_mode_does_not_escalate():
+    af = Antifreeze(CFG)
+    assert run(af, 0, None, 1.0) == (1, UnitState.CIRCULATE)
+    assert run(af, 3600, None, 1.0)[0] == 1

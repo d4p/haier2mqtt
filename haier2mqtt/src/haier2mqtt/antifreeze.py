@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from .model import UnitState
@@ -27,11 +28,23 @@ class Antifreeze:
         self._continuous = False
         self._continuous_since: float | None = None
         self._water_at_start: float | None = None
+        self._continuous_dropout_since: float | None = None
         self._periodic_anchor: float | None = None
         self._warm_since: float | None = None
+        self._water_seen: float | None = None
 
     def update(self, now: float, water: float | None, outdoor: float | None) -> int:
         c = self.cfg
+        # Normalise non-finite inputs to None
+        if water is not None and not math.isfinite(water):
+            water = None
+        if outdoor is not None and not math.isfinite(outdoor):
+            outdoor = None
+
+        # Track when a valid water reading was last seen
+        if water is not None:
+            self._water_seen = now
+
         if water is not None and water > c.water_exit:
             if self._warm_since is None:
                 self._warm_since = now
@@ -50,11 +63,18 @@ class Antifreeze:
             self._continuous = True
             self._continuous_since = now
             self._water_at_start = water
+            self._continuous_dropout_since = None
         elif self._continuous and warm_long:
             self._stop_continuous()
 
-        # Unknown outdoor AND unknown water: cannot assess -> treat as cold (safe default).
-        cold = (outdoor is not None and outdoor < c.outdoor_start) or (outdoor is None and water is None)
+        # Track when continuous circulation loses valid water data
+        if self._continuous and water is None and self._continuous_dropout_since is None:
+            self._continuous_dropout_since = now
+        elif self._continuous and water is not None:
+            self._continuous_dropout_since = None
+
+        # Unknown outdoor temperature: cannot assess frost risk -> treat as cold (safe default).
+        cold = outdoor is None or outdoor < c.outdoor_start
         if cold and self._periodic_anchor is None:
             self._periodic_anchor = now
         elif not cold:
@@ -68,8 +88,19 @@ class Antifreeze:
             and self._water_at_start is not None
             and water <= self._water_at_start
         )
+        water_lost = (
+            self._continuous
+            and water is None
+            and self._continuous_dropout_since is not None
+            and now - self._continuous_dropout_since >= c.circulate_check_s
+        )
         wants_circulation = self._continuous or cold
-        if (water is not None and water < c.water_heat) or not_rising or (self.pump_failed and wants_circulation):
+        if (
+            (water is not None and water < c.water_heat)
+            or not_rising
+            or water_lost
+            or (self.pump_failed and wants_circulation)
+        ):
             self.stage = 2
         elif wants_circulation:
             self.stage = 1
@@ -92,3 +123,4 @@ class Antifreeze:
         self._continuous = False
         self._continuous_since = None
         self._water_at_start = None
+        self._continuous_dropout_since = None
