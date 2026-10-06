@@ -153,7 +153,10 @@ class Controller:
             return st
         st.reading = reading
         actual = reading.unit_state
-        self._track_actual(now, actual)
+        # Min-on timing tracks only genuine heat-only operation; a stray on-state (cool/tank) counts as
+        # not heating (UNKNOWN) so it is never held and gets corrected immediately.
+        heating = actual is UnitState.HEAT and reading.heat_only_on
+        self._track_actual(now, actual if heating or actual is not UnitState.HEAT else UnitState.UNKNOWN)
 
         forecast_fresh = (self.inputs.forecast_at is not None
                           and now - self.inputs.forecast_at <= self.cfg.forecast_stale_s)
@@ -165,7 +168,7 @@ class Controller:
             self.last_auto = dec.target
         st.decision = dec
         st.curve_target = (curve_target(self.inputs.curve, dec.outdoor) if dec.outdoor is not None else None)
-        effective, delayed_until = self._gate(now, dec, actual)
+        effective, delayed_until = self._gate(now, dec, actual, heating)
         st.effective, st.delayed_until = effective, delayed_until
 
         urgent = dec.reason == "antifreeze" and effective is UnitState.HEAT   # emergency heat ignores backoff
@@ -194,9 +197,10 @@ class Controller:
                 self._off_since = now
         self._prev_actual = actual
 
-    def _gate(self, now: float, dec: Decision, actual: UnitState) -> tuple[UnitState, float | None]:
+    def _gate(self, now: float, dec: Decision, actual: UnitState,
+              heating: bool) -> tuple[UnitState, float | None]:
         t = dec.target
-        if actual is UnitState.HEAT and t is not UnitState.HEAT:
+        if heating and t is not UnitState.HEAT:
             until = self._heat_since + self.cfg.min_on_s
             if now < until:
                 return UnitState.HEAT, until

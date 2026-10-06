@@ -252,3 +252,33 @@ async def test_antifreeze_circulation_continues_while_heat_waits_for_min_off():
     demand(inputs, clock, True)
     st = await ctrl.cycle()
     assert st.effective is UnitState.CIRCULATE and st.delayed_until is not None
+
+
+async def test_restart_stray_on_states_are_corrected_immediately():
+    for stray in (0x03, 0x85):                           # on+cool, on+heat+tank
+        ctrl, bus, clock, inputs = make(state_low=stray, startup_settled=False)
+        demand(inputs, clock, False)
+        st = await ctrl.cycle()
+        assert st.effective is UnitState.STANDBY and st.delayed_until is None, hex(stray)
+        assert [v[0] >> 8 for _, v in bus.writes] == [0x86, 0x01], hex(stray)   # mode, then power off
+        assert bus.core[0] & 0xFF == 0x04, hex(stray)
+
+
+async def test_restart_heat_only_with_pump_bit_is_still_held():
+    ctrl, bus, clock, inputs = make(state_low=0x25, startup_settled=False)
+    demand(inputs, clock, False)
+    st = await ctrl.cycle()
+    assert st.effective is UnitState.HEAT and st.delayed_until is not None
+    assert bus.core[0] & 0x01                            # still on (only the stray pump bit is cleared)
+
+
+async def test_stray_on_state_while_running_is_not_held():
+    ctrl, bus, clock, inputs = make(state_low=0x04)
+    demand(inputs, clock, False)
+    await ctrl.cycle()
+    bus.core[0] = 0xDD83                                 # unit switched itself on in tank mode
+    clock.advance(10)
+    demand(inputs, clock, False)
+    st = await ctrl.cycle()
+    assert st.effective is UnitState.STANDBY and st.delayed_until is None
+    assert bus.core[0] & 0xFF == 0x04

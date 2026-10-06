@@ -57,6 +57,11 @@ class Reading:
         return bool(self.state_low & 0x20)
 
     @property
+    def heat_only_on(self) -> bool:
+        """On and heating heat-only: power + heat bits, cool and tank bits clear (pump bit ignored)."""
+        return (self.state_low & 0x87) == 0x05
+
+    @property
     def unit_state(self) -> UnitState:
         if self.power_on:
             return UnitState.HEAT
