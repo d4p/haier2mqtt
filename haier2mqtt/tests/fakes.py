@@ -1,6 +1,10 @@
 """Test doubles."""
 
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
+
+from haier2mqtt.bus import BusError
+from haier2mqtt.model import Raw
 
 
 class FakeModbusClient:
@@ -46,3 +50,62 @@ def unit_registers() -> dict[int, int]:
     regs[201] = 0
     regs.update({241 + i: 0 for i in range(22)})
     return regs
+
+
+class FakeClock:
+    def __init__(self, start: float = 0.0) -> None:
+        self.t = start
+
+    def __call__(self) -> float:
+        return self.t
+
+    def advance(self, s: float) -> None:
+        self.t += s
+
+
+class FakeBus:
+    """Simulated unit: applies register-101 commands the way the real unit is assumed to (reports 0xDD high byte)."""
+
+    def __init__(self, core, status, mode=(0,), advanced=None, accept=None) -> None:
+        self.core = list(core)
+        self.status = tuple(status)
+        self.mode = [mode[0]]
+        self.advanced = advanced
+        self.accept = accept or (lambda cmd, low: True)
+        self.writes: list[tuple[int, tuple[int, ...]]] = []
+        self.fail_read = False
+        self.fail_writes = False
+        self.reachable = True
+
+    async def read_raw(self):
+        if self.fail_read:
+            self.reachable = False
+            return None
+        self.reachable = True
+        return Raw(tuple(self.core), self.status, tuple(self.mode), self.advanced)
+
+    @asynccontextmanager
+    async def transaction(self):
+        yield self
+
+    async def read_core(self):
+        if self.fail_read:
+            raise BusError("down")
+        return tuple(self.core)
+
+    async def read_mode(self):
+        return tuple(self.mode)
+
+    async def write(self, address, values):
+        if self.fail_writes:
+            raise BusError("write down")
+        self.writes.append((address, tuple(values)))
+        if address == 101:
+            cmd, low = values[0] >> 8, values[0] & 0xFF
+            if self.accept(cmd, low):
+                if cmd == 0x04:
+                    self.core[1] = values[1]
+                else:
+                    self.core[0] = 0xDD00 | low
+        elif address == 201:
+            self.mode = [values[0] & 0xFF]
