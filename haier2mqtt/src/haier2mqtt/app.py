@@ -33,10 +33,7 @@ class App:
         mode = saved.get("mode", "auto")
         self.inputs = Inputs(curve=curve_from_dict(saved.get("curve", {}), settings.initial_curve),
                              mode=mode if mode in MODES else "auto")
-        try:
-            last_auto = UnitState(saved.get("last_auto", "standby"))
-        except ValueError:
-            last_auto = UnitState.STANDBY
+        last_auto = UnitState.HEAT if saved.get("last_auto") == "heat" else UnitState.STANDBY
         self.bus = bus or HaierBus(settings.host, settings.port, settings.slave, timeout=settings.timeout_s)
         self.controller = Controller(self.bus, settings.commands, settings.control, Antifreeze(settings.antifreeze),
                                      self.inputs, last_auto=last_auto, clock=clock)

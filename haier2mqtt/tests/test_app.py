@@ -101,3 +101,12 @@ async def test_run_survives_iteration_exception(tmp_path, monkeypatch):
             break
     task.cancel()
     assert Link.calls >= 3
+
+
+def test_restore_accepts_only_heat_or_standby_last_auto(tmp_path):
+    for saved, expected in (("heat", UnitState.HEAT), ("standby", UnitState.STANDBY),
+                            ("unknown", UnitState.STANDBY), ("circulate", UnitState.STANDBY),
+                            ("bogus", UnitState.STANDBY), (None, UnitState.STANDBY)):
+        (tmp_path / "state.json").write_text(json.dumps({"mode": "auto", "last_auto": saved}))
+        app, _, _ = make(tmp_path)
+        assert app.controller.last_auto is expected, saved

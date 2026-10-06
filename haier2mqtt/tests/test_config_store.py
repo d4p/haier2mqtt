@@ -1,9 +1,8 @@
 import json
-
-import pytest
+import logging
 
 from haier2mqtt.config import load_settings
-from haier2mqtt.curve import Curve, CurveError, parse_points
+from haier2mqtt.curve import Curve, parse_points
 from haier2mqtt.store import Store, curve_from_dict, curve_to_dict
 
 OPTIONS = {
@@ -36,9 +35,22 @@ def test_load_settings_converts_units(tmp_path):
     assert (s.mqtt.host, s.mqtt.port, s.mqtt.username) == ("core-mosquitto", 1883, "addons")
 
 
-def test_load_settings_rejects_invalid_curve(tmp_path):
-    with pytest.raises(CurveError):
-        load_settings(write(tmp_path, curve_points="10:29, 0:32"), ENV, tmp_path)
+def test_load_settings_invalid_curve_falls_back_to_default(tmp_path, caplog):
+    for bad in ({"curve_points": "10:29, 0:32"}, {"curve_points": "abc"}, {"curve_min_water": "x"},
+                {"curve_min_water": 50, "curve_max_water": 30}):
+        caplog.clear()
+        with caplog.at_level(logging.ERROR, logger="haier2mqtt.config"):
+            s = load_settings(write(tmp_path, **bad), ENV, tmp_path)
+        assert s.initial_curve == Curve(parse_points("-20:40, 0:32, 10:29, 20:28"), 25.0, 45.0), bad
+        assert any(r.levelno == logging.ERROR and "curve" in r.getMessage() for r in caplog.records), bad
+
+
+def test_load_settings_empty_mqtt_env_falls_back_to_defaults(tmp_path):
+    env = {"MQTT_HOST": "", "MQTT_PORT": "", "MQTT_USER": "", "MQTT_PASSWORD": ""}
+    s = load_settings(write(tmp_path), env, tmp_path)
+    assert (s.mqtt.host, s.mqtt.port, s.mqtt.username, s.mqtt.password) == ("core-mosquitto", 1883, None, None)
+    s = load_settings(write(tmp_path), {}, tmp_path)
+    assert (s.mqtt.host, s.mqtt.port, s.mqtt.username, s.mqtt.password) == ("core-mosquitto", 1883, None, None)
 
 
 def test_store_roundtrip_and_corrupt_file(tmp_path):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,10 @@ from .antifreeze import AntifreezeConfig
 from .codec import Commands
 from .controller import ControlConfig
 from .curve import Curve, parse_points, validate
+
+_LOG = logging.getLogger(__name__)
+DEFAULT_CURVE_POINTS = "-20:40, 0:32, 10:29, 20:28"
+DEFAULT_CURVE_MIN, DEFAULT_CURVE_MAX = 25.0, 45.0
 
 
 @dataclass(frozen=True)
@@ -37,10 +42,21 @@ class Settings:
     log_level: str
 
 
+def _initial_curve(o: Mapping) -> Curve:
+    """Curve from the options; an invalid curve must not prevent startup (no frost protection) -> default."""
+    try:
+        return validate(Curve(parse_points(o["curve_points"]), float(o["curve_min_water"]),
+                              float(o["curve_max_water"])))
+    except (ValueError, TypeError, KeyError) as exc:
+        _LOG.error("invalid curve options (%s); using the default curve %s, %g-%g °C",
+                   exc, DEFAULT_CURVE_POINTS, DEFAULT_CURVE_MIN, DEFAULT_CURVE_MAX)
+        return Curve(parse_points(DEFAULT_CURVE_POINTS), DEFAULT_CURVE_MIN, DEFAULT_CURVE_MAX)
+
+
 def load_settings(options_path: Path, env: Mapping[str, str], data_dir: Path) -> Settings:
     o = json.loads(Path(options_path).read_text())
     m = 60.0
-    curve = validate(Curve(parse_points(o["curve_points"]), float(o["curve_min_water"]), float(o["curve_max_water"])))
+    curve = _initial_curve(o)
     return Settings(
         host=o["gateway_host"],
         port=int(o["gateway_port"]),
@@ -65,7 +81,7 @@ def load_settings(options_path: Path, env: Mapping[str, str], data_dir: Path) ->
             circulate_check_s=o["antifreeze_circulate_check_min"] * m,
         ),
         initial_curve=curve,
-        mqtt=MqttSettings(env.get("MQTT_HOST", "core-mosquitto"), int(env.get("MQTT_PORT", "1883")),
+        mqtt=MqttSettings(env.get("MQTT_HOST") or "core-mosquitto", int(env.get("MQTT_PORT") or "1883"),
                           env.get("MQTT_USER") or None, env.get("MQTT_PASSWORD") or None),
         data_dir=Path(data_dir),
         log_level=str(o.get("log_level", "info")),
