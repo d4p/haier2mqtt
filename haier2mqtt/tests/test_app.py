@@ -1,0 +1,58 @@
+import json
+
+from haier2mqtt.app import App
+from haier2mqtt.config import load_settings
+from haier2mqtt.model import UnitState
+from tests.fakes import FakeBus, FakeClock
+from tests.helpers import advanced, core, status
+from tests.test_config_store import ENV, write
+
+
+def make(tmp_path, state_low=0x04, **opts):
+    settings = load_settings(write(tmp_path, **opts), ENV, tmp_path)
+    bus = FakeBus(core(state_low=state_low), status(), advanced=advanced(tao=10.0))
+    clock = FakeClock(1000)
+    app = App(settings, bus=bus, clock=clock, wall=lambda: 1_700_000_000.0)
+    return app, bus, clock
+
+
+async def test_step_produces_state_and_persists_mode(tmp_path):
+    app, _, _ = make(tmp_path)
+    app.handle_command("mode", "wyłączona")
+    state = await app.step()
+    assert state["mode"] == "wyłączona" and state["desired"] == "standby"
+    assert json.loads((tmp_path / "state.json").read_text())["mode"] == "wyłączona"
+
+
+async def test_restore_keeps_heating_without_heartbeat(tmp_path):
+    # Review Focus 4: last auto target "heat" persisted, service restarts, HA is down
+    (tmp_path / "state.json").write_text(json.dumps({"mode": "auto", "last_auto": "heat"}))
+    app, _, _ = make(tmp_path, state_low=0x05)
+    state = await app.step()
+    assert state["desired"] == "heat" and state["reason"] == "fallback"
+    assert app.controller.last_auto is UnitState.HEAT
+
+
+async def test_last_auto_is_persisted_when_demand_changes(tmp_path):
+    app, _, _ = make(tmp_path)
+    app.handle_command("demand", '{"demand": true}')
+    await app.step()
+    assert json.loads((tmp_path / "state.json").read_text())["last_auto"] == "heat"
+
+
+async def test_invalid_curve_command_raises_problem(tmp_path):
+    app, _, _ = make(tmp_path)
+    app.handle_command("curve_points", "10:29, 0:32")
+    state = await app.step()
+    assert state["problems"]["curve_rejected"]["active"] is True
+
+
+async def test_cycle_exception_does_not_kill_step(tmp_path):
+    app, bus, _ = make(tmp_path)
+
+    async def boom():
+        raise RuntimeError("unexpected")
+
+    bus.read_raw = boom
+    state = await app.step()
+    assert state["bus_reachable"] is False
